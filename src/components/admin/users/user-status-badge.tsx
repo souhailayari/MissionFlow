@@ -1,0 +1,2 @@
+import { Badge } from "@/components/ui/badge";
+export function UserStatusBadge({ active }: Readonly<{ active: boolean }>) { return <Badge tone={active ? "success" : "danger"}>{active ? "Actif" : "Inactif"}</Badge>; }
