@@ -11,7 +11,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { PageContainer } from "@/components/ui/page-container";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { exportMissionReport, exportUserReport, getResourceReportStatistics, listAdminDepartments, listAdminTeams, listAdminUsers, type MissionReportFilters, type ResourceReportStatistics, type UserReportFilters } from "@/lib/api/admin";
+import { exportMissionReport, exportUserReport, getResourceReportStatistics, listAdminDepartments, listAdminTeams, listAllAdminUsers, type MissionReportFilters, type ResourceReportStatistics, type UserReportFilters } from "@/lib/api/admin";
 import { getMissionDashboardStats } from "@/lib/api/missions";
 import type { AdminDepartment, AdminTeam, AdminUser } from "@/types/admin";
 import type { MissionDashboardStats } from "@/types/missions";
@@ -46,7 +46,7 @@ export default function AdminReportsPage() {
       const [nextDepartments, nextTeams, nextUsers, nextMissionStats] = await Promise.all([
         listAdminDepartments(),
         listAdminTeams(),
-        listAdminUsers(),
+        listAllAdminUsers(),
         getMissionDashboardStats(),
       ]);
       setDepartments(nextDepartments);

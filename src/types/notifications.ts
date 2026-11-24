@@ -9,6 +9,6 @@ export type Notification = {
   createdAt: string;
 };
 
-export type NotificationsResponse = { data: Notification[] };
+export type NotificationsResponse = { data: Notification[]; meta: { page: number; limit: number; total: number; totalPages: number; unreadCount: number; readCount: number } };
 export type NotificationResponse = { data: Notification };
 export type UnreadNotificationCountResponse = { data: { count: number } };

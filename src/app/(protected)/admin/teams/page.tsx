@@ -12,7 +12,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { PageContainer } from "@/components/ui/page-container";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { createAdminTeam, listAdminDepartments, listAdminTeams, listAdminUsers, updateAdminTeam } from "@/lib/api/admin";
+import { createAdminTeam, listAdminDepartments, listAdminTeams, listAllAdminUsers, updateAdminTeam } from "@/lib/api/admin";
 import type { AdminDepartment, AdminTeam, AdminUser, TeamPayload, UpdateTeamPayload } from "@/types/admin";
 
 export default function AdminTeamsPage() {
@@ -30,7 +30,7 @@ export default function AdminTeamsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextTeams, nextDepartments, nextUsers] = await Promise.all([listAdminTeams(), listAdminDepartments(), listAdminUsers()]);
+      const [nextTeams, nextDepartments, nextUsers] = await Promise.all([listAdminTeams(), listAdminDepartments(), listAllAdminUsers()]);
       setTeams(nextTeams);
       setDepartments(nextDepartments);
       setLeaders(nextUsers.filter((user) => user.departmentRole === "CHEF_EQUIPE"));

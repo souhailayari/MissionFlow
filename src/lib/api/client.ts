@@ -1,7 +1,6 @@
 import {
   expireSession,
   getAccessToken,
-  getRefreshToken,
   saveSession,
 } from "@/lib/auth/token-storage";
 import type { AuthResponse } from "@/types/auth";
@@ -113,23 +112,12 @@ const getErrorMessage = (
 };
 
 const refreshSession = async (): Promise<RefreshResult> => {
-  const refreshToken = getRefreshToken();
-
-  if (!refreshToken) {
-    return "invalid";
-  }
-
   if (!refreshPromise) {
     refreshPromise = fetch(
-      `${apiBaseUrl()}/auth/refresh`,
+      `${apiBaseUrl()}/auth/web-refresh`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          refreshToken,
-        }),
+        credentials: "include",
       },
     )
       .then(async (response) => {
@@ -191,10 +179,16 @@ export async function apiRequest<T>(
   let response: Response;
 
   try {
+    const cookieSessionEndpoint = path === "/auth/web-login"
+      || path === "/auth/login"
+      || path === "/auth/web-refresh"
+      || path === "/auth/web-logout"
+      || path === "/auth/qr-login/status";
     response = await fetch(
       `${apiBaseUrl()}${path}`,
       {
         ...requestInit,
+        credentials: requestInit.credentials ?? (cookieSessionEndpoint ? "include" : "omit"),
         headers: requestHeaders,
         body:
           body instanceof FormData
@@ -215,7 +209,7 @@ export async function apiRequest<T>(
   if (
     response.status === 401 &&
     !skipRefresh &&
-    path !== "/auth/refresh"
+    path !== "/auth/web-refresh"
   ) {
     const refreshed = await refreshSession();
 

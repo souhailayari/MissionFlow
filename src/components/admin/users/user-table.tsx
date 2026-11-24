@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AdminDepartment, AdminTeam, AdminUser } from "@/types/admin";
-import { Building2, Pencil, Power, UsersRound } from "lucide-react";
+import { Building2, KeyRound, Pencil, Power, UsersRound } from "lucide-react";
 
 function roleLabel(user: AdminUser): string {
   const role = user.globalRole ?? user.departmentRole;
@@ -63,7 +63,7 @@ function DirectoryBadge({ label, kind }: Readonly<{ label: string; kind: "depart
   );
 }
 
-function UserActions({ user, onEdit, onToggle }: Readonly<{ user: AdminUser; onEdit: (user: AdminUser) => void; onToggle: (user: AdminUser) => void }>) {
+function UserActions({ user, onEdit, onToggle, onResetTwoFactor }: Readonly<{ user: AdminUser; onEdit: (user: AdminUser) => void; onToggle: (user: AdminUser) => void; onResetTwoFactor: (user: AdminUser) => void }>) {
   const fullName = `${user.firstName} ${user.lastName}`;
   const toggleLabel = user.isActive ? "Désactiver" : "Activer";
   return (
@@ -74,6 +74,7 @@ function UserActions({ user, onEdit, onToggle }: Readonly<{ user: AdminUser; onE
       <Button type="button" variant="ghost" size="icon-xs" className={`min-h-11 min-w-11 rounded-xl hover:bg-[var(--danger-soft)] md:min-h-8 md:min-w-8 ${user.isActive ? "text-[var(--danger)] hover:brightness-90" : "text-[var(--success)] hover:bg-[var(--success-soft)] hover:brightness-90"}`} onClick={() => onToggle(user)} aria-label={`${toggleLabel} ${fullName}`} title={toggleLabel}>
         <Power className="h-3.5 w-3.5" />
       </Button>
+      {user.twoFactorEnabled && <Button type="button" variant="ghost" size="icon-xs" className="min-h-11 min-w-11 rounded-xl text-amber-700 hover:bg-amber-50 md:min-h-8 md:min-w-8" onClick={() => onResetTwoFactor(user)} aria-label={`Réinitialiser la 2FA de ${fullName}`} title="Réinitialiser la 2FA"><KeyRound className="h-3.5 w-3.5" /></Button>}
     </div>
   );
 }
@@ -85,6 +86,7 @@ export function UserTable({
   totalCount,
   onEdit,
   onToggle,
+  onResetTwoFactor,
 }: Readonly<{
   users: AdminUser[];
   departments: AdminDepartment[];
@@ -92,6 +94,7 @@ export function UserTable({
   totalCount: number;
   onEdit: (user: AdminUser) => void;
   onToggle: (user: AdminUser) => void;
+  onResetTwoFactor: (user: AdminUser) => void;
 }>) {
   const departmentName = (user: AdminUser) => departments.find((department) => department.id === user.departmentId)?.name ?? "-";
   const teamName = (user: AdminUser) => teams.find((team) => team.id === user.teamId)?.name ?? user.team?.name ?? "-";
@@ -144,7 +147,7 @@ export function UserTable({
                 <td className="overflow-hidden px-3 py-1"><DirectoryBadge label={departmentName(user)} kind="department" /></td>
                 <td className="overflow-hidden px-3 py-1"><DirectoryBadge label={teamName(user)} kind="team" /></td>
                 <td className="px-3 py-1"><UserStatus active={user.isActive} /></td>
-                <td className="px-2 py-1"><UserActions user={user} onEdit={onEdit} onToggle={onToggle} /></td>
+                <td className="px-2 py-1"><UserActions user={user} onEdit={onEdit} onToggle={onToggle} onResetTwoFactor={onResetTwoFactor} /></td>
               </tr>
             ))}
           </tbody>
@@ -157,7 +160,7 @@ export function UserTable({
           <li key={user.id} className="px-3 py-3 transition-colors hover:bg-[var(--surface-alt)]">
             <div className="flex items-center justify-between gap-3">
               <UserIdentity user={user} />
-              <UserActions user={user} onEdit={onEdit} onToggle={onToggle} />
+              <UserActions user={user} onEdit={onEdit} onToggle={onToggle} onResetTwoFactor={onResetTwoFactor} />
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <UserRoleBadge user={user} />

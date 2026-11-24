@@ -91,6 +91,7 @@ export type MissionDocument = {
   mimeType: string;
   documentType: string;
   uploadedById: string;
+  sizeBytes?: number | null;
   createdAt: string;
 };
 

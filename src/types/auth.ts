@@ -8,6 +8,7 @@ export type DepartmentRole =
 export type User = {
   id: string;
   email: string;
+  phoneNumber?: string | null;
   globalRole: GlobalRole | null;
   departmentRole: DepartmentRole | null;
   departmentId: string | null;
@@ -22,7 +23,6 @@ export type User = {
 
 export type AuthTokens = {
   accessToken: string;
-  refreshToken: string;
   user: User;
 };
 

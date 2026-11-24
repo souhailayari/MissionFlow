@@ -23,6 +23,7 @@ const pageBreadcrumb = (pathname: string): string => {
   if (pathname.startsWith("/admin")) return "Administration";
   if (pathname.startsWith("/missions")) return "Missions";
   if (pathname.startsWith("/notifications")) return "Notifications";
+  if (pathname.startsWith("/security")) return "Sécurité du compte";
   if (pathname.startsWith("/dashboard")) return "Tableau de bord";
   return "Espace de travail";
 };

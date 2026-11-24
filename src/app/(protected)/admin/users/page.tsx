@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { PageContainer } from "@/components/ui/page-container";
 import { Select } from "@/components/ui/select";
 import { ApiError } from "@/lib/api/client";
-import { createAdminUser, listAdminDepartments, listAdminTeams, listAdminUsers, updateAdminUser, updateAdminUserStatus } from "@/lib/api/admin";
+import { createAdminUser, listAdminDepartments, listAdminTeams, listAdminUsers, resetAdminUserTwoFactor, updateAdminUser, updateAdminUserStatus } from "@/lib/api/admin";
 import type { AdminDepartment, AdminTeam, AdminUser, CreateAdminUserPayload, UpdateAdminUserPayload } from "@/types/admin";
 import { ArrowUpRight, ChevronLeft, ChevronRight, RotateCcw, Search, SlidersHorizontal, UserPlus, Users, X } from "lucide-react";
 
@@ -53,6 +53,9 @@ export default function AdminUsersPage() {
   const [filters, setFilters] = useState<UserFilters>(initialFilters);
   const [page, setPage] = useState(1);
   const pageSize = 8;
+  const [userTotal, setUserTotal] = useState(0);
+  const [userTotalPages, setUserTotalPages] = useState(1);
+  const [serverSearch, setServerSearch] = useState("");
 
   const editingUser = useMemo(
     () => users.find((user) => user.id === editingUserId) ?? null,
@@ -64,11 +67,17 @@ export default function AdminUsersPage() {
     setError(null);
     try {
       const [nextUsers, nextDepartments, nextTeams] = await Promise.all([
-        listAdminUsers(),
+        listAdminUsers({ page, limit: pageSize, search: serverSearch || undefined, role: filters.role || undefined, departmentId: filters.departmentId || undefined, teamId: filters.teamId || undefined, active: filters.status === "all" ? undefined : filters.status === "active" }),
         listAdminDepartments(),
         listAdminTeams(),
       ]);
-      setUsers(nextUsers);
+      if (nextUsers.meta.totalPages > 0 && page > nextUsers.meta.totalPages) {
+        setPage(nextUsers.meta.totalPages);
+        return;
+      }
+      setUsers(nextUsers.data);
+      setUserTotal(nextUsers.meta.total);
+      setUserTotalPages(nextUsers.meta.totalPages);
       setDepartments(nextDepartments);
       setTeams(nextTeams);
     } catch (requestError) {
@@ -76,7 +85,12 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [filters.departmentId, filters.role, filters.status, filters.teamId, page, pageSize, serverSearch]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setServerSearch(filters.search.trim()); setPage(1); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [filters.search]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -110,10 +124,18 @@ export default function AdminUsersPage() {
     await load();
   };
 
+  const resetTwoFactor = async (user: AdminUser) => {
+    if (!window.confirm(`Réinitialiser la vérification 2FA de ${user.firstName} ${user.lastName} ? Toutes ses sessions seront fermées.`)) return;
+    setFeedback(null);
+    try { await resetAdminUserTwoFactor(user.id); setFeedback("2FA réinitialisée et sessions révoquées."); await load(); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Impossible de réinitialiser la 2FA."); }
+  };
+
   const formInitialValues = editingUser ? {
     firstName: editingUser.firstName,
     lastName: editingUser.lastName,
     email: editingUser.email,
+    phoneNumber: editingUser.phoneNumber ?? "",
     password: "",
     matricule: editingUser.matricule ?? "",
     function: editingUser.function ?? "",
@@ -130,28 +152,12 @@ export default function AdminUsersPage() {
     [filters.departmentId, teams],
   );
 
-  const filteredUsers = useMemo(() => {
-    const search = filters.search.trim().toLocaleLowerCase("fr-FR");
-    return users.filter((user) => {
-      const fullName = `${user.firstName} ${user.lastName}`.toLocaleLowerCase("fr-FR");
-      const matchesSearch = !search || [
-        fullName,
-        user.email.toLocaleLowerCase("fr-FR"),
-        user.matricule?.toLocaleLowerCase("fr-FR") ?? "",
-        user.function?.toLocaleLowerCase("fr-FR") ?? "",
-      ].some((value) => value.includes(search));
-      const matchesRole = !filters.role || user.globalRole === filters.role || user.departmentRole === filters.role;
-      const matchesDepartment = !filters.departmentId || user.departmentId === filters.departmentId;
-      const matchesTeam = !filters.teamId || user.teamId === filters.teamId;
-      const matchesStatus = filters.status === "all" || user.isActive === (filters.status === "active");
-      return matchesSearch && matchesRole && matchesDepartment && matchesTeam && matchesStatus;
-    });
-  }, [filters, users]);
+  const filteredUsers = users;
 
   const hasActiveFilters = Boolean(filters.search.trim() || filters.role || filters.departmentId || filters.teamId || filters.status !== "all");
-  const pageCount = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const visibleUsers = filteredUsers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageCount = userTotalPages;
+  const currentPage = page;
+  const visibleUsers = users;
   const updateFilters = (nextFilters: Partial<UserFilters>) => {
     setFilters((current) => ({ ...current, ...nextFilters }));
     setPage(1);
@@ -195,7 +201,7 @@ export default function AdminUsersPage() {
             <div>
               <p className="text-[11px] font-medium text-[var(--text-muted)]">Utilisateurs trouvés</p>
               <p className="text-lg font-bold leading-6 tabular-nums text-[var(--text)]" aria-live="polite" aria-busy={loading}>
-                {loading || error ? <span className="text-[var(--text-muted)]">—</span> : filteredUsers.length}
+                {loading || error ? <span className="text-[var(--text-muted)]">—</span> : userTotal}
               </p>
             </div>
           </div>
@@ -323,9 +329,10 @@ export default function AdminUsersPage() {
                 users={visibleUsers}
                 departments={departments}
                 teams={teams}
-                totalCount={filteredUsers.length}
+                totalCount={userTotal}
                 onEdit={(user) => setEditingUserId(user.id)}
                 onToggle={(user) => void toggle(user)}
+                onResetTwoFactor={(user) => void resetTwoFactor(user)}
               />
             ) : (
               <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-8 text-center">
@@ -333,10 +340,10 @@ export default function AdminUsersPage() {
                 <p className="mt-1 text-xs text-slate-500">{users.length ? "Modifiez ou effacez les filtres pour afficher les comptes." : "Les comptes apparaîtront ici lorsqu&apos;ils seront disponibles."}</p>
               </div>
             )}
-            {filteredUsers.length > 0 && (
+            {userTotal > 0 && (
               <footer className="flex flex-wrap items-center justify-between gap-3 px-1 pt-1 text-xs text-[var(--text-muted)]">
                 <span>
-                  Affichage <strong className="font-semibold text-[var(--text-soft)]">{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredUsers.length)}</strong> sur {filteredUsers.length}
+                  Affichage <strong className="font-semibold text-[var(--text-soft)]">{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, userTotal)}</strong> sur {userTotal}
                 </span>
                 {pageCount > 1 && (
                   <nav aria-label="Pagination des utilisateurs" className="flex items-center gap-2">

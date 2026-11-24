@@ -1,13 +1,11 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { ApiError, apiRequest } from "@/lib/api/client";
-import { login as loginRequest, logout as logoutRequest } from "@/lib/api/auth";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { apiRequest } from "@/lib/api/client";
+import { logoutWebSession } from "@/lib/api/auth";
 import {
   clearSession,
-  getRefreshToken,
   getStoredUser,
-  readSession,
   saveSession,
   setSessionExpiredListener,
 } from "@/lib/auth/token-storage";
@@ -16,19 +14,19 @@ import type { AuthResponse, AuthStatus, User } from "@/types/auth";
 type SessionContextValue = {
   status: AuthStatus;
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  loginWithSession: (session: AuthResponse) => void;
   logout: () => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 let restorePromise: Promise<AuthResponse> | null = null;
 
-const refreshStoredSession = (refreshToken: string): Promise<AuthResponse> => {
+const refreshWebSession = (): Promise<AuthResponse> => {
   if (!restorePromise) {
-    restorePromise = apiRequest<AuthResponse>("/auth/refresh", {
+    restorePromise = apiRequest<AuthResponse>("/auth/web-refresh", {
       method: "POST",
-      body: { refreshToken },
       skipRefresh: true,
+      credentials: "include",
     }).finally(() => {
       restorePromise = null;
     });
@@ -48,27 +46,17 @@ export function SessionProvider({ children }: Readonly<{ children: ReactNode }>)
       setStatus("unauthenticated");
     });
     const restore = async () => {
-      const stored = readSession();
-      if (!stored?.refreshToken) {
-        if (active) setStatus("unauthenticated");
-        return;
-      }
-
       try {
-        const refreshed = await refreshStoredSession(stored.refreshToken);
+        const refreshed = await refreshWebSession();
         saveSession(refreshed);
         if (active) {
           setUser(refreshed.user);
           setStatus("authenticated");
         }
-      } catch (error) {
+      } catch {
         if (!active) return;
-        if (error instanceof ApiError && (error.status === 0 || error.status === 429 || error.status >= 500)) {
-          setUser(stored.user);
-          setStatus("authenticated");
-          return;
-        }
         clearSession();
+        setUser(null);
         setStatus("unauthenticated");
       }
     };
@@ -79,22 +67,20 @@ export function SessionProvider({ children }: Readonly<{ children: ReactNode }>)
     };
   }, []);
 
-  const login = async (email: string, password: string): Promise<void> => {
-    const session = await loginRequest({ email, password });
+  const loginWithSession = useCallback((session: AuthResponse): void => {
     saveSession(session);
     setUser(session.user);
     setStatus("authenticated");
-  };
+  }, []);
 
   const logout = async (): Promise<void> => {
-    const refreshToken = getRefreshToken();
     clearSession();
     setUser(null);
     setStatus("unauthenticated");
-    if (refreshToken) await logoutRequest(refreshToken).catch(() => undefined);
+    await logoutWebSession().catch(() => undefined);
   };
 
-  const value: SessionContextValue = { status, user: user ?? getStoredUser(), login, logout };
+  const value: SessionContextValue = { status, user: user ?? getStoredUser(), loginWithSession, logout };
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

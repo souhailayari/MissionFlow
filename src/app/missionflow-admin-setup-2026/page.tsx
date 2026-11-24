@@ -16,8 +16,8 @@ const setupSchema = z.object({
   lastName: z.string().trim().min(1, "Le nom est obligatoire."),
   email: z.string().email("Saisissez une adresse email valide."),
   setupToken: z.string().min(32, "Le code d’initialisation doit contenir au moins 32 caractères."),
-  password: z.string().min(8, "Le mot de passe doit contenir au moins 8 caractères."),
-  passwordConfirmation: z.string().min(8, "Confirmez le mot de passe.")
+  password: z.string().min(12, "Le mot de passe doit contenir au moins 12 caractères.").max(128, "Le mot de passe ne peut pas dépasser 128 caractères."),
+  passwordConfirmation: z.string().min(12, "Confirmez le mot de passe.").max(128, "Le mot de passe ne peut pas dépasser 128 caractères.")
 }).superRefine((values, context) => {
   if (values.password !== values.passwordConfirmation) context.addIssue({ code: "custom", path: ["passwordConfirmation"], message: "Les mots de passe ne correspondent pas." });
 });

@@ -45,5 +45,14 @@
     "shadcn": "^4.22.1",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "shadcn": {
+      "ts-morph": {
+        "@ts-morph/common": {
+          "minimatch": "11.0.9"
+        }
+      }
+    }
   }
 }

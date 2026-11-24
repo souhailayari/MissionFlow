@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Download, Eye, FileArchive, FileImage, FileSpreadsheet, FileText, LoaderCircle, TriangleAlert } from "lucide-react";
+import { AlertCircle, Download, Eye, FileArchive, FileImage, FileSpreadsheet, FileText, LoaderCircle, Trash2, TriangleAlert } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiRequest } from "@/lib/api/client";
+import { useSession } from "@/lib/auth/session-context";
 import type { Mission, MissionDocument } from "@/types/missions";
 
 const getFileIcon = (mimeType: string) => {
@@ -24,6 +25,8 @@ const getDocumentTypeLabel = (documentType: string) => {
   return documentType;
 };
 
+const formatFileSize = (size?: number | null) => size ? `${(size / (1024 * 1024)).toFixed(1)} Mo` : null;
+
 function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -35,10 +38,11 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function MissionDocuments({ mission }: Readonly<{ mission: Mission }>) {
+export function MissionDocuments({ mission, onChanged }: Readonly<{ mission: Mission; onChanged: () => void }>) {
+  const { user } = useSession();
   const [selectedDocument, setSelectedDocument] = useState<MissionDocument | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<{ id: string; action: "preview" | "download" } | null>(null);
+  const [busyAction, setBusyAction] = useState<{ id: string; action: "preview" | "download" | "delete" } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const previewRequest = useRef(0);
 
@@ -84,6 +88,23 @@ export function MissionDocuments({ mission }: Readonly<{ mission: Mission }>) {
     }
   };
 
+  const canDeleteDocument = (file: MissionDocument) => user?.globalRole === "ADMIN"
+    || (file.uploadedById === user?.id && (mission.status === "DRAFT" || mission.status === "REJECTED"));
+
+  const deleteDocument = async (file: MissionDocument) => {
+    if (!window.confirm(`Supprimer définitivement « ${file.fileName} » ?`)) return;
+    setBusyAction({ id: file.id, action: "delete" });
+    setError(null);
+    try {
+      await apiRequest(`/documents/${encodeURIComponent(file.id)}`, { method: "DELETE" });
+      onChanged();
+    } catch {
+      setError("Impossible de supprimer ce document. Réessayez.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <>
       <Card className="gap-3 rounded-2xl border-slate-200/80 p-4 shadow-[0_10px_24px_rgba(15,23,42,0.04)]">
@@ -112,7 +133,7 @@ export function MissionDocuments({ mission }: Readonly<{ mission: Mission }>) {
                     </span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-900">{file.fileName}</p>
-                      <p className="text-xs text-slate-500">{getDocumentTypeLabel(file.documentType)} · {file.mimeType}</p>
+                      <p className="text-xs text-slate-500">{getDocumentTypeLabel(file.documentType)} · {file.mimeType}{formatFileSize(file.sizeBytes) ? ` · ${formatFileSize(file.sizeBytes)}` : ""}</p>
                     </div>
                   </div>
 
@@ -139,6 +160,18 @@ export function MissionDocuments({ mission }: Readonly<{ mission: Mission }>) {
                     >
                       {isBusy && busyAction?.action === "download" ? "Téléchargement..." : "Télécharger"}
                     </Button>
+                    {canDeleteDocument(file) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void deleteDocument(file)}
+                        disabled={busyAction !== null}
+                        leftIcon={isBusy && busyAction?.action === "delete" ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+                      >
+                        {isBusy && busyAction?.action === "delete" ? "Suppression..." : "Supprimer"}
+                      </Button>
+                    )}
                   </div>
                 </li>
               );

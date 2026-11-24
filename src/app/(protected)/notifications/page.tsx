@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api/client";
-import { listNotifications, markNotificationAsRead } from "@/lib/api/notifications";
+import { listNotifications, markAllNotificationsAsRead, markNotificationAsRead } from "@/lib/api/notifications";
 import { Alert } from "@/components/ui/alert";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
@@ -31,19 +31,37 @@ export default function NotificationsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
   const [filter, setFilter] = useState<NotificationFilter>("all");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [readCount, setReadCount] = useState(0);
 
   const loadNotifications = useCallback(async () => {
     setError(null);
     setIsLoading(true);
     try {
-      const response = await listNotifications();
+      const response = await listNotifications(1, filter);
       setNotifications(response.data);
+      setPage(1); setTotal(response.meta.total); setTotalPages(response.meta.totalPages); setUnreadCount(response.meta.unreadCount); setReadCount(response.meta.readCount);
     } catch (requestError) {
       setError(requestError instanceof ApiError ? requestError.message : "Impossible de charger les notifications.");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [filter]);
+
+  const loadMore = async () => {
+    if (isLoading || page >= totalPages) return;
+    setIsLoading(true);
+    try {
+      const response = await listNotifications(page + 1, filter);
+      setNotifications((current) => [...current, ...response.data]);
+      setPage(response.meta.page); setTotal(response.meta.total); setTotalPages(response.meta.totalPages); setUnreadCount(response.meta.unreadCount); setReadCount(response.meta.readCount);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Impossible de charger les anciennes notifications.");
+    } finally { setIsLoading(false); }
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadNotifications(), 0);
@@ -56,7 +74,9 @@ export default function NotificationsPage() {
     try {
       const response = await markNotificationAsRead(notification.id);
       setNotifications((current) => current.map((item) => item.id === notification.id ? response.data : item));
+      setUnreadCount((count) => Math.max(0, count - 1)); setReadCount((count) => count + 1);
       window.dispatchEvent(new CustomEvent("notifications:updated"));
+      if (filter === "unread") void loadNotifications();
       return true;
     } catch (requestError) {
       setActionError(requestError instanceof ApiError ? requestError.message : "Impossible de marquer cette notification comme lue.");
@@ -70,32 +90,16 @@ export default function NotificationsPage() {
   };
 
   const markAllAsRead = async () => {
-    const unreadNotifications = notifications.filter((notification) => !notification.readAt);
-    if (unreadNotifications.length === 0 || isMarkingAllRead) return;
+    if (unreadCount === 0 || isMarkingAllRead) return;
 
     setActionError(null);
     setIsMarkingAllRead(true);
     try {
-      const results = await Promise.allSettled(unreadNotifications.map((notification) => markNotificationAsRead(notification.id)));
-      const updatedNotifications = new Map<string, Notification>();
-      let firstError: unknown;
-
-      results.forEach((result, index) => {
-        if (result.status === "fulfilled") {
-          updatedNotifications.set(unreadNotifications[index].id, result.value.data);
-        } else if (firstError === undefined) {
-          firstError = result.reason;
-        }
-      });
-
-      if (updatedNotifications.size > 0) {
-        setNotifications((current) => current.map((notification) => updatedNotifications.get(notification.id) ?? notification));
-        window.dispatchEvent(new CustomEvent("notifications:updated"));
-      }
-
-      if (firstError !== undefined) {
-        setActionError(firstError instanceof ApiError ? firstError.message : "Certaines notifications n'ont pas pu être marquées comme lues.");
-      }
+      await markAllNotificationsAsRead();
+      setNotifications((current) => current.map((notification) => ({ ...notification, readAt: notification.readAt ?? new Date().toISOString() })));
+      setReadCount((count) => count + unreadCount); setUnreadCount(0);
+      window.dispatchEvent(new CustomEvent("notifications:updated"));
+      if (filter === "unread") await loadNotifications();
     } catch (requestError) {
       setActionError(requestError instanceof ApiError ? requestError.message : "Impossible de marquer les notifications comme lues.");
     } finally {
@@ -103,13 +107,9 @@ export default function NotificationsPage() {
     }
   };
 
-  const unreadCount = notifications.filter((notification) => !notification.readAt).length;
-  const readCount = notifications.length - unreadCount;
-  const visibleNotifications = notifications.filter((notification) =>
-    filter === "all" || (filter === "unread" ? !notification.readAt : Boolean(notification.readAt)),
-  );
+  const visibleNotifications = notifications;
   const filterOptions: Array<{ value: NotificationFilter; label: string; count: number }> = [
-    { value: "all", label: "Toutes", count: notifications.length },
+    { value: "all", label: "Toutes", count: total },
     { value: "unread", label: "Non lues", count: unreadCount },
     { value: "read", label: "Lues", count: readCount },
   ];
@@ -137,7 +137,7 @@ export default function NotificationsPage() {
   return <PageContainer>
       <NotificationsWelcome unreadCount={unreadCount} isLoading={isLoading} isMarkingAllRead={isMarkingAllRead} onMarkAllAsRead={() => void markAllAsRead()} />
       {actionError && <Alert tone="danger" role="alert">{actionError}</Alert>}
-      {!isLoading && !error && notifications.length > 0 && <div role="group" aria-label="Filtrer les notifications" className="inline-flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-1">
+      {!isLoading && !error && total > 0 && <div role="group" aria-label="Filtrer les notifications" className="inline-flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-1">
           {filterOptions.map((option) => <button
             key={option.value}
             type="button"
@@ -149,9 +149,9 @@ export default function NotificationsPage() {
           </button>)}
       </div>}
       {isLoading && <div className="space-y-3"><Skeleton className="h-24 rounded-2xl" /><Skeleton className="h-24 rounded-2xl" /><Skeleton className="h-24 rounded-2xl" /></div>}
-      {!isLoading && !error && notifications.length === 0 && <EmptyState title="Aucune notification" description="Les mises à jour de vos missions apparaîtront ici." />}
+      {!isLoading && !error && total === 0 && <EmptyState title={filter === "all" ? "Aucune notification" : filter === "unread" ? "Aucune notification non lue" : "Aucune notification lue"} description="Les mises à jour de vos missions apparaîtront ici." />}
       {!isLoading && error && <div><ErrorState title="Notifications indisponibles" message={error} /><Button type="button" size="sm" variant="outline" onClick={() => void loadNotifications()}>Réessayer</Button></div>}
-      {!isLoading && !error && notifications.length > 0 && visibleNotifications.length === 0 && <EmptyState
+      {!isLoading && !error && total > 0 && visibleNotifications.length === 0 && <EmptyState
         title={filter === "unread" ? "Aucune notification non lue" : "Aucune notification lue"}
         description="Choisissez un autre filtre pour consulter le reste de votre activité."
       />}
@@ -172,5 +172,6 @@ export default function NotificationsPage() {
           </ul>
         </section>)}
       </div>}
+      {!isLoading && !error && page < totalPages && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void loadMore()}>Charger les plus anciennes</Button></div>}
   </PageContainer>;
 }

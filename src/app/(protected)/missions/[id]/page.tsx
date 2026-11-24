@@ -162,7 +162,7 @@ export default function MissionDetailPage() {
                 <MissionSummary mission={mission} />
                 <MissionResources mission={mission} />
                 {!directionNeedsData && <MissionRoute key={mission.id} mission={mission} />}
-                <MissionDocuments mission={mission} />
+                <MissionDocuments mission={mission} onChanged={() => void loadMission()} />
               </div>
               <div className="space-y-3">
                 <MissionWorkflow mission={mission} />

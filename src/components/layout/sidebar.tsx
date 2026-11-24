@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Bell, BriefcaseBusiness, Building2, ChartNoAxesCombined, CreditCard, FolderKanban, LayoutGrid, MapPinned, ShieldCheck, Users, WalletCards, X, type LucideIcon } from "lucide-react";
+import { Bell, BriefcaseBusiness, Building2, ChartNoAxesCombined, CreditCard, FolderKanban, LayoutGrid, LockKeyhole, MapPinned, ShieldCheck, Users, WalletCards, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { GlobalRole, DepartmentRole } from "@/types/auth";
 
@@ -11,6 +11,7 @@ export const navigation: NavigationItem[] = [
   { label: "Rapport carburant & tickets", href: "/direction/history", roles: ["DIRECTION"], available: true, icon: CreditCard },
   { label: "Budget mensuel", href: "/direction/budget", roles: ["DIRECTION"], available: true, icon: WalletCards },
   { label: "Notifications", href: "/notifications", roles: ["ADMIN", "RH", "DIRECTION", "DIRECTEUR_DEPARTEMENT", "CHEF_EQUIPE", "EMPLOYE"], available: true, icon: Bell },
+  { label: "Sécurité du compte", href: "/security", roles: ["ADMIN", "RH", "DIRECTION", "DIRECTEUR_DEPARTEMENT", "CHEF_EQUIPE", "EMPLOYE"], available: true, icon: LockKeyhole },
   { label: "Administration", href: "/admin", roles: ["ADMIN"], available: true, icon: ShieldCheck },
   { label: "Utilisateurs", href: "/admin/users", roles: ["ADMIN"], available: true, icon: Users },
   { label: "Départements", href: "/admin/departments", roles: ["ADMIN"], available: true, icon: Building2 },

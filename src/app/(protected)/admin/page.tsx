@@ -10,7 +10,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { PageContainer } from "@/components/ui/page-container";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { listAdminCompanySites, listAdminDepartments, listAdminTeams, listAdminUsers } from "@/lib/api/admin";
+import { listAdminCompanySites, listAdminDepartments, listAdminTeams, listAllAdminUsers } from "@/lib/api/admin";
 import type { AdminDepartment, AdminTeam, AdminUser } from "@/types/admin";
 import type { CompanySite } from "@/types/company-site";
 
@@ -52,13 +52,13 @@ export default function AdminHomePage() {
     setLoading(true);
     setError(null);
     try {
-      const [users, departments, teams, sites] = await Promise.all([
-        listAdminUsers(),
+      const [usersResponse, departments, teams, sites] = await Promise.all([
+        listAllAdminUsers(),
         listAdminDepartments(),
         listAdminTeams(),
         listAdminCompanySites(),
       ]);
-      setOverview({ users, departments, teams, sites });
+      setOverview({ users: usersResponse, departments, teams, sites });
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {

@@ -23,6 +23,7 @@ export type UserFormValues = {
   firstName: string;
   lastName: string;
   email: string;
+  phoneNumber: string;
   password: string;
   matricule: string;
   function: string;
@@ -36,6 +37,7 @@ const emptyValues = (): UserFormValues => ({
   firstName: "",
   lastName: "",
   email: "",
+  phoneNumber: "",
   password: "",
   matricule: "",
   function: "",
@@ -49,6 +51,7 @@ const toFormValues = (source?: Partial<UserFormValues>): UserFormValues => ({
   firstName: source?.firstName ?? "",
   lastName: source?.lastName ?? "",
   email: source?.email ?? "",
+  phoneNumber: source?.phoneNumber ?? "",
   password: source?.password ?? "",
   matricule: source?.matricule ?? "",
   function: source?.function ?? "",
@@ -63,6 +66,7 @@ const buildRolePayload = (values: UserFormValues) => {
     firstName: values.firstName.trim(),
     lastName: values.lastName.trim(),
     email: values.email.trim().toLowerCase(),
+    phoneNumber: values.phoneNumber.trim() || null,
     ...(values.matricule.trim() ? { matricule: values.matricule.trim() } : {}),
     ...(values.function.trim() ? { function: values.function.trim() } : {}),
     ...(values.departmentId ? { departmentId: values.departmentId } : {}),
@@ -264,12 +268,17 @@ export function UserForm({
                 <Input id="email" required type="email" autoComplete="email" value={values.email} onChange={(event) => set("email", event.target.value)} />
               </UserField>
             </div>
+            <div className="sm:col-span-2">
+              <UserField id="phoneNumber" label="WhatsApp (format international)">
+                <Input id="phoneNumber" type="tel" autoComplete="tel" placeholder="+216XXXXXXXX" value={values.phoneNumber} onChange={(event) => set("phoneNumber", event.target.value)} />
+              </UserField>
+            </div>
           </FormSection>
 
           <FormSection id="access-section" title="Accès et profil" description="Définissez les identifiants et le rôle global." icon={KeyRound}>
             <div className="sm:col-span-2">
               <UserField id="password" label={mode === "create" ? "Mot de passe" : "Nouveau mot de passe (optionnel)"}>
-                <Input id="password" required={mode === "create"} minLength={8} type="password" autoComplete="new-password" value={values.password} onChange={(event) => set("password", event.target.value)} />
+                <Input id="password" required={mode === "create"} minLength={12} maxLength={128} type="password" autoComplete="new-password" value={values.password} onChange={(event) => set("password", event.target.value)} />
               </UserField>
             </div>
             <UserField id="matricule" label="Matricule">
@@ -348,7 +357,8 @@ export function UserForm({
         <Input required placeholder="Prénom" value={values.firstName} onChange={(event) => set("firstName", event.target.value)} />
         <Input required placeholder="Nom" value={values.lastName} onChange={(event) => set("lastName", event.target.value)} />
         <Input required type="email" placeholder="Email" value={values.email} onChange={(event) => set("email", event.target.value)} />
-        <Input type="password" minLength={8} placeholder={mode === "create" ? "Mot de passe" : "Nouveau mot de passe (optionnel)"} value={values.password} onChange={(event) => set("password", event.target.value)} />
+        <Input type="tel" autoComplete="tel" placeholder="WhatsApp · +216XXXXXXXX" value={values.phoneNumber} onChange={(event) => set("phoneNumber", event.target.value)} />
+        <Input type="password" minLength={12} maxLength={128} placeholder={mode === "create" ? "Mot de passe (12 caractères min.)" : "Nouveau mot de passe (12 caractères min.)"} value={values.password} onChange={(event) => set("password", event.target.value)} />
         <Input placeholder="Matricule" value={values.matricule} onChange={(event) => set("matricule", event.target.value)} />
         <Input placeholder="Fonction" value={values.function} onChange={(event) => set("function", event.target.value)} />
 

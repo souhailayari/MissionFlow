@@ -1,16 +1,20 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, Check, LockKeyhole, LoaderCircle, Mail, QrCode, ShieldCheck, UserRound } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
+import { completeTwoFactorLogin, startLoginVerification, verifyLoginVerification, webLogin, type LoginVerificationChallenge } from "@/lib/api/auth";
 import { useSession } from "@/lib/auth/session-context";
+import { QrLoginPanel } from "@/components/auth/qr-login-panel";
+import type { AuthResponse } from "@/types/auth";
 
 const loginSchema = z.object({
   email: z.string().email("Saisissez une adresse email valide."),
@@ -19,18 +23,163 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>;
 
+const hasLeadingZeroBits = (digest: Uint8Array, bits: number): boolean => {
+  const fullBytes = Math.floor(bits / 8);
+  for (let index = 0; index < fullBytes; index += 1) {
+    if (digest[index] !== 0) return false;
+  }
+  const remainingBits = bits % 8;
+  return remainingBits === 0 || (digest[fullBytes] ?? 255) < 2 ** (8 - remainingBits);
+};
+
+const solveLoginVerification = async (challenge: string, difficultyBits: number): Promise<string> => {
+  if (!globalThis.crypto?.subtle) throw new Error("La vérification sécurisée n’est pas disponible dans ce navigateur.");
+  const bits = Math.max(8, Math.min(20, Math.floor(difficultyBits)));
+  const maxAttempts = 2 ** Math.min(bits + 3, 30);
+  const encoder = new TextEncoder();
+  for (let nonce = 0; nonce < maxAttempts; nonce += 1) {
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", encoder.encode(`${challenge}:${nonce}`)));
+    if (hasLeadingZeroBits(digest, bits)) return String(nonce);
+    if (nonce > 0 && nonce % 2048 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
+  throw new Error("La vérification a pris trop de temps. Veuillez réessayer.");
+};
+
 export default function LoginPage() {
   const router = useRouter();
-  const { login, status } = useSession();
+  const { loginWithSession, status } = useSession();
   const [showPassword, setShowPassword] = useState(false);
-  const { register, handleSubmit, formState: { errors, isSubmitting }, setError } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
+  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
+  const [step, setStep] = useState<"email" | "verification" | "password" | "twoFactor">("email");
+  const [verificationChallenge, setVerificationChallenge] = useState<LoginVerificationChallenge | null>(null);
+  const [verificationToken, setVerificationToken] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [showOtherMethods, setShowOtherMethods] = useState(false);
+  const [showQrLogin, setShowQrLogin] = useState(false);
+  const [twoFactorChallengeToken, setTwoFactorChallengeToken] = useState<string | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [isCompletingTwoFactor, setIsCompletingTwoFactor] = useState(false);
+  const { register, handleSubmit, formState: { errors, isSubmitting }, setError, clearErrors, getValues, resetField, setFocus } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
+  const handleQrSession = useCallback((session: AuthResponse) => {
+    loginWithSession(session);
+    router.replace("/dashboard");
+  }, [loginWithSession, router]);
+
+  const onContinue = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const result = loginSchema.shape.email.safeParse(getValues("email"));
+    if (!result.success) {
+      setError("email", { type: "validate", message: result.error.issues[0]?.message ?? "Saisissez une adresse email valide." });
+      return;
+    }
+    clearErrors();
+    setIsCheckingEmail(true);
+    try {
+      const challenge = await startLoginVerification(result.data);
+      setVerificationChallenge(challenge.data);
+      setVerificationToken(null);
+      setStep("verification");
+    } catch (error) {
+      setError("root", { type: "server", message: error instanceof Error ? error.message : "Impossible de vérifier cette adresse e-mail. Réessayez." });
+    } finally {
+      setIsCheckingEmail(false);
+    }
+  };
+
+  const onVerify = async () => {
+    if (!verificationChallenge || verificationToken || isVerifying) return;
+    clearErrors("root");
+    setIsVerifying(true);
+    try {
+      let challenge = verificationChallenge;
+      if (new Date(verificationChallenge.expiresAt).getTime() <= Date.now()) {
+        const renewed = await startLoginVerification(getValues("email"));
+        setVerificationChallenge(renewed.data);
+        challenge = renewed.data;
+      }
+      if (new Date(challenge.expiresAt).getTime() <= Date.now()) {
+        throw new Error("Le contrôle a expiré. Veuillez recommencer.");
+      }
+      const nonce = await solveLoginVerification(challenge.challenge, challenge.difficultyBits);
+      const result = await verifyLoginVerification(getValues("email"), challenge.challenge, nonce);
+      setVerificationToken(result.data.verificationToken);
+    } catch (error) {
+      setError("root", { type: "server", message: error instanceof Error ? error.message : "La vérification a échoué. Réessayez." });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const restartVerification = async () => {
+    if (isVerifying) return;
+    setIsVerifying(true);
+    clearErrors("root");
+    try {
+      const renewed = await startLoginVerification(getValues("email"));
+      setVerificationChallenge(renewed.data);
+      setVerificationToken(null);
+    } catch (error) {
+      setError("root", { type: "server", message: error instanceof Error ? error.message : "Impossible de démarrer le contrôle. Réessayez." });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const continueAfterVerification = () => {
+    if (!verificationToken) return;
+    clearErrors("root");
+    setStep("password");
+  };
 
   const onSubmit = async (values: LoginForm) => {
+    if (!verificationToken) {
+      setError("root", { message: "Confirmez d’abord la vérification MissionFlow." });
+      setStep("verification");
+      return;
+    }
     try {
-      await login(values.email, values.password);
+      const result = await webLogin({ email: values.email, password: values.password, verificationToken });
+      if ("requiresTwoFactor" in result) {
+        setTwoFactorChallengeToken(result.challengeToken);
+        setTwoFactorCode("");
+        clearErrors("root");
+        setStep("twoFactor");
+      } else {
+        loginWithSession(result);
+        router.replace("/dashboard");
+      }
     } catch (error) {
+      if (error instanceof ApiError && error.status === 403) {
+        setVerificationToken(null);
+        setStep("verification");
+        setError("root", { type: "server", message: "La vérification a expiré. Confirmez à nouveau pour continuer." });
+        try {
+          const renewed = await startLoginVerification(values.email);
+          setVerificationChallenge(renewed.data);
+        } catch {
+          setVerificationChallenge(null);
+        }
+        return;
+      }
       const message = error instanceof ApiError && error.status === 401 ? "Email ou mot de passe incorrect." : error instanceof Error ? error.message : "Une erreur est survenue. Veuillez réessayer.";
       setError("root", { message });
+    }
+  };
+
+  const onSubmitTwoFactor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!twoFactorChallengeToken || isCompletingTwoFactor) return;
+    if (!twoFactorCode.trim()) { setError("root", { message: "Saisissez votre code d’authentification ou un code de secours." }); return; }
+    setIsCompletingTwoFactor(true);
+    clearErrors("root");
+    try {
+      const session = await completeTwoFactorLogin(twoFactorChallengeToken, twoFactorCode.trim());
+      loginWithSession(session);
+      router.replace("/dashboard");
+    } catch (error) {
+      setError("root", { type: "server", message: error instanceof ApiError && error.status === 401 ? "Code invalide ou session expirée. Réessayez." : error instanceof Error ? error.message : "Impossible de vérifier le code." });
+    } finally {
+      setIsCompletingTwoFactor(false);
     }
   };
 
@@ -39,6 +188,10 @@ export default function LoginPage() {
       router.replace("/dashboard");
     }
   }, [router, status]);
+
+  useEffect(() => {
+    if (step === "password") setFocus("password");
+  }, [setFocus, step]);
 
   if (status !== "unauthenticated") {
     return null;
@@ -261,40 +414,158 @@ export default function LoginPage() {
           <div className="login-content relative mx-auto w-full max-w-[410px] rounded-[24px] border border-[#e4e8f1] bg-[linear-gradient(145deg,#fbfbff_0%,#f5f6ff_58%,#f6faff_100%)] p-5 shadow-[0_18px_50px_rgba(16,26,51,0.08)] sm:p-7 lg:p-8">
             <div className="login-heading-rule mb-7 h-px w-10 bg-[var(--brand)] lg:mb-9" />
             <h2 className="text-[clamp(1.9rem,3vw,2.65rem)] font-medium leading-[1.1] tracking-[-0.06em] text-[var(--text)]">
-              Bienvenue dans<br /><span className="text-[var(--brand)]">MissionFlow</span>
+              {step === "email" ? <>Bienvenue dans<br /><span className="text-[var(--brand)]">MissionFlow</span></> : step === "verification" ? <>Confirmez votre<br /><span className="text-[var(--brand)]">identité</span></> : <>Bienvenue</>}
             </h2>
               <p className="mt-4 max-w-[340px] text-sm leading-6 text-[var(--text-soft)] sm:text-[15px]">
-              Connectez-vous pour accéder à vos missions et à leur suivi.
+              {step === "email" ? "Connectez-vous pour accéder à vos missions et à leur suivi." : step === "verification" ? "Confirmez que vous êtes bien à l’origine de cette connexion." : step === "twoFactor" ? "Confirmez votre identité avec votre application d’authentification." : "Saisissez votre mot de passe pour continuer."}
             </p>
 
-            <form onSubmit={handleSubmit(onSubmit)} className="login-form mt-9 space-y-5" noValidate>
+            {step === "email" ? <form onSubmit={onContinue} className="login-form mt-9 space-y-5" noValidate>
               <div>
                 <label htmlFor="email" className="mb-2 block text-[12px] font-semibold tracking-[0.01em] text-[var(--text)]">Adresse email</label>
                 <div className="group relative">
                   <Mail className="pointer-events-none absolute left-4 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-[var(--brand)]" strokeWidth={1.7} aria-hidden="true" />
-                  <Input id="email" type="email" autoComplete="email" placeholder="nom@entreprise.fr" {...register("email")} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? "email-error" : undefined} className="h-[54px] rounded-xl border-[var(--line)] bg-[var(--surface)] pl-11 pr-4 text-sm text-[var(--text)] transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-slate-400 hover:border-[var(--line-strong)] focus-visible:border-[var(--brand)] focus-visible:bg-white focus-visible:ring-[3px] focus-visible:ring-[var(--brand)]/10" />
+                  <Input id="email" type="email" autoComplete="email" disabled={isCheckingEmail} placeholder="nom@entreprise.fr" {...register("email")} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? "email-error" : undefined} className="h-[54px] rounded-xl border-[var(--line)] bg-[var(--surface)] pl-11 pr-4 text-sm text-[var(--text)] transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-slate-400 hover:border-[var(--line-strong)] focus-visible:border-[var(--brand)] focus-visible:bg-white focus-visible:ring-[3px] focus-visible:ring-[var(--brand)]/10" />
                 </div>
                 {errors.email && <p id="email-error" role="alert" className="mt-1.5 text-xs font-medium text-red-700">{errors.email.message}</p>}
               </div>
 
+              <div className="-mt-2 text-right">
+                <Link href="/forgot-password" className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline">Mot de passe oublié ?</Link>
+              </div>
+
+              {errors.root && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">{errors.root.message}</p>}
+
+              <Button type="submit" size="lg" isLoading={isCheckingEmail} disabled={isCheckingEmail} className="mt-2 h-[54px] w-full justify-between rounded-xl bg-[var(--brand)] px-5 text-[13px] font-semibold tracking-[0.01em] text-white shadow-[0_8px_20px_rgba(79,70,229,0.18)] transition duration-200 hover:-translate-y-px hover:bg-[var(--brand-strong)] hover:shadow-[0_12px_24px_rgba(79,70,229,0.24)] active:translate-y-0 focus-visible:ring-4 focus-visible:ring-[var(--focus)]/20">
+                {isCheckingEmail ? "Vérification..." : "Suivant"}
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </form> : step === "verification" ? <section className="login-form mt-8 space-y-5" aria-labelledby="login-verification-title">
+              <h3 id="login-verification-title" className="text-sm font-medium text-[var(--text)]">Confirmez que vous n’êtes pas un robot</h3>
+              <div className="flex min-h-[82px] items-center justify-between gap-4 rounded-xl border border-[var(--line)] bg-white px-4 py-4 shadow-sm">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={Boolean(verificationToken)}
+                  aria-busy={isVerifying}
+                  disabled={isVerifying || Boolean(verificationToken) || !verificationChallenge}
+                  onClick={() => void onVerify()}
+                  className="group inline-flex min-h-10 min-w-0 flex-1 items-center gap-3 text-left text-sm font-medium text-[var(--text)] disabled:cursor-default"
+                >
+                  <span aria-hidden="true" className={`grid h-6 w-6 shrink-0 place-items-center rounded-[4px] border transition-colors ${verificationToken ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-400 bg-white group-hover:border-[var(--brand)]"}`}>
+                    {isVerifying ? <LoaderCircle className="h-4 w-4 animate-spin text-[var(--brand)]" /> : verificationToken ? <Check className="h-4 w-4" strokeWidth={3} /> : null}
+                  </span>
+                  <span>{isVerifying ? "Vérification en cours…" : verificationToken ? "Vérification confirmée" : "Je ne suis pas un robot"}</span>
+                </button>
+                <span className="flex shrink-0 flex-col items-center gap-1 text-[9px] font-medium uppercase tracking-[0.1em] text-slate-500">
+                  <ShieldCheck className="h-7 w-7 text-[var(--brand)]" strokeWidth={1.6} aria-hidden="true" />
+                  MissionFlow
+                </span>
+              </div>
+
+              {!verificationChallenge && <button type="button" onClick={() => void restartVerification()} disabled={isVerifying} className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline disabled:opacity-60">Réessayer le contrôle</button>}
+
+              {errors.root && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">{errors.root.message}</p>}
+
+              <Button type="button" size="lg" onClick={continueAfterVerification} disabled={!verificationToken} className="mt-2 h-[54px] w-full justify-between rounded-xl bg-[var(--brand)] px-5 text-[13px] font-semibold tracking-[0.01em] text-white shadow-[0_8px_20px_rgba(79,70,229,0.18)] transition duration-200 hover:-translate-y-px hover:bg-[var(--brand-strong)] hover:shadow-[0_12px_24px_rgba(79,70,229,0.24)] active:translate-y-0 focus-visible:ring-4 focus-visible:ring-[var(--focus)]/20 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none" rightIcon={<ArrowRight className="h-4 w-4" aria-hidden="true" />}>
+                Suivant
+              </Button>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <button type="button" onClick={() => { setVerificationChallenge(null); setVerificationToken(null); setShowOtherMethods(false); setShowQrLogin(false); clearErrors("root"); setStep("email"); }} className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline">Modifier l’adresse e-mail</button>
+                <button type="button" onClick={() => { setShowOtherMethods((visible) => !visible); setShowQrLogin(false); }} aria-expanded={showOtherMethods} className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline">Essayer une autre méthode</button>
+              </div>
+
+              {showOtherMethods && <section className="rounded-xl border border-[var(--line)] bg-white p-2" aria-label="Autres méthodes de connexion">
+                <button type="button" onClick={() => { setShowOtherMethods(false); setShowQrLogin(true); }} className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium text-[var(--text)] transition hover:bg-slate-50">
+                  <QrCode size={16} className="text-[var(--brand)]" aria-hidden="true" />
+                  MissionFlow mobile avec QR code
+                </button>
+                <Link href="/forgot-password" className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-[var(--text)] transition hover:bg-slate-50">
+                  <Mail size={16} className="text-[var(--brand)]" aria-hidden="true" />
+                  Récupérer mon compte
+                </Link>
+              </section>}
+
+              {showQrLogin && <div>
+                <button type="button" onClick={() => setShowQrLogin(false)} className="text-xs font-semibold text-[var(--brand-strong)] hover:underline">Retour aux méthodes</button>
+                <QrLoginPanel onSession={handleQrSession} />
+              </div>}
+            </section> : step === "password" ? <>
+              <div aria-label="Compte sélectionné" className="mt-6 flex items-center gap-3 rounded-xl border border-[var(--line)] bg-white px-3.5 py-3 shadow-sm">
+                <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-indigo-100 bg-indigo-50 text-[var(--brand)]">
+                  <UserRound size={18} strokeWidth={1.8} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">Compte</span>
+                  <span className="block truncate text-sm font-medium text-[var(--text)]">{getValues("email")}</span>
+                </span>
+                <button type="button" onClick={() => { resetField("password"); setVerificationChallenge(null); setVerificationToken(null); clearErrors("root"); setShowOtherMethods(false); setShowQrLogin(false); setStep("email"); }} className="shrink-0 text-xs font-semibold text-[var(--brand-strong)] hover:underline">Modifier</button>
+              </div>
+
+              <form onSubmit={handleSubmit(onSubmit)} className="login-password-enter login-form mt-5 space-y-5" noValidate>
               <div>
                 <label htmlFor="password" className="mb-2 block text-[12px] font-semibold tracking-[0.01em] text-[var(--text)]">Mot de passe</label>
                 <div className="group relative">
                   <LockKeyhole className="pointer-events-none absolute left-4 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-[var(--brand)]" strokeWidth={1.7} aria-hidden="true" />
-                  <Input id="password" type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Saisissez votre mot de passe" {...register("password")} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? "password-error" : undefined} className="h-[54px] rounded-xl border-[var(--line)] bg-[var(--surface)] py-2 pl-11 pr-12 text-sm text-[var(--text)] transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-slate-400 hover:border-[var(--line-strong)] focus-visible:border-[var(--brand)] focus-visible:bg-white focus-visible:ring-[3px] focus-visible:ring-[var(--brand)]/10" />
-                  <button type="button" onClick={() => setShowPassword((open) => !open)} aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"} title={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"} className="absolute inset-y-1 right-1 inline-flex w-11 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-indigo-50 hover:text-[var(--brand-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)]/50">
-                    {showPassword ? <EyeOff className="h-[17px] w-[17px]" aria-hidden="true" /> : <Eye className="h-[17px] w-[17px]" aria-hidden="true" />}
-                  </button>
+                  <Input id="password" type={showPassword ? "text" : "password"} autoComplete="current-password" placeholder="Saisissez votre mot de passe" {...register("password")} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? "password-error" : undefined} className="h-[54px] rounded-xl border-[var(--line)] bg-[var(--surface)] py-2 pl-11 pr-4 text-sm text-[var(--text)] transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-slate-400 hover:border-[var(--line-strong)] focus-visible:border-[var(--brand)] focus-visible:bg-white focus-visible:ring-[3px] focus-visible:ring-[var(--brand)]/10" />
                 </div>
                 {errors.password && <p id="password-error" role="alert" className="mt-1.5 text-xs font-medium text-red-700">{errors.password.message}</p>}
+              </div>
+
+              <div className="-mt-2 flex flex-wrap items-center justify-between gap-3">
+                <label htmlFor="show-password" className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
+                  <input id="show-password" type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} className="h-4 w-4 rounded border-slate-300 accent-[var(--brand)] focus:ring-[var(--focus)]" />
+                  Afficher le mot de passe
+                </label>
+                <Link href="/forgot-password" className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline">Mot de passe oublié ?</Link>
               </div>
 
               {errors.root && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">{errors.root.message}</p>}
 
               <Button type="submit" size="lg" isLoading={isSubmitting} disabled={isSubmitting} className="mt-2 h-[54px] w-full justify-between rounded-xl bg-[var(--brand)] px-5 text-[13px] font-semibold tracking-[0.01em] text-white shadow-[0_8px_20px_rgba(79,70,229,0.18)] transition duration-200 hover:-translate-y-px hover:bg-[var(--brand-strong)] hover:shadow-[0_12px_24px_rgba(79,70,229,0.24)] active:translate-y-0 focus-visible:ring-4 focus-visible:ring-[var(--focus)]/20 disabled:translate-y-0 disabled:shadow-none" rightIcon={!isSubmitting ? <ArrowRight className="h-4 w-4" aria-hidden="true" /> : undefined}>
-                {isSubmitting ? "Connexion en cours..." : "Se connecter"}
+                {isSubmitting ? "Connexion en cours..." : "Suivant"}
               </Button>
-            </form>
+              </form>
+
+              <div className="mt-4">
+                <button type="button" onClick={() => { setShowOtherMethods((visible) => !visible); setShowQrLogin(false); }} aria-expanded={showOtherMethods} className="min-h-10 text-sm font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]/50">
+                  Essayer une autre méthode
+                </button>
+                {showOtherMethods && <section className="mt-2 rounded-xl border border-[var(--line)] bg-white p-2" aria-label="Autres méthodes de connexion">
+                  <p className="px-3 py-2 text-xs font-semibold text-slate-500">Choisissez comment vous connecter</p>
+                  <button type="button" onClick={() => { setShowOtherMethods(false); setShowQrLogin(false); }} className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium text-[var(--text)] transition hover:bg-slate-50">
+                    <LockKeyhole size={16} className="text-[var(--brand)]" aria-hidden="true" />
+                    Utiliser mon mot de passe
+                  </button>
+                  <button type="button" onClick={() => { setShowOtherMethods(false); setShowQrLogin(true); }} className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium text-[var(--text)] transition hover:bg-slate-50">
+                    <QrCode size={16} className="text-[var(--brand)]" aria-hidden="true" />
+                    MissionFlow mobile avec QR code
+                  </button>
+                  <Link href="/forgot-password" className="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium text-[var(--text)] transition hover:bg-slate-50">
+                    <Mail size={16} className="text-[var(--brand)]" aria-hidden="true" />
+                    Récupérer mon compte
+                  </Link>
+                </section>}
+                {showQrLogin && <div className="mt-2">
+                  <button type="button" onClick={() => setShowQrLogin(false)} className="text-xs font-semibold text-[var(--brand-strong)] hover:underline">Retour aux méthodes</button>
+                  <QrLoginPanel onSession={handleQrSession} />
+                </div>}
+              </div>
+            </> : <form onSubmit={onSubmitTwoFactor} className="login-form mt-7 space-y-5" noValidate>
+              <div className="rounded-xl border border-[var(--line)] bg-white px-3.5 py-3 text-sm leading-5 text-[var(--text-soft)]">
+                Saisissez le code à 6 chiffres de votre application, ou l’un de vos codes de secours.
+              </div>
+              <div>
+                <label htmlFor="two-factor-code" className="mb-2 block text-[12px] font-semibold text-[var(--text)]">Code de vérification</label>
+                <Input id="two-factor-code" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} autoComplete="one-time-code" autoCapitalize="characters" inputMode="text" placeholder="000000 ou code de secours" aria-describedby={errors.root ? "two-factor-error" : undefined} className="h-[54px] rounded-xl border-[var(--line)] bg-[var(--surface)] px-4 text-sm tracking-[0.08em] text-[var(--text)] focus-visible:border-[var(--brand)] focus-visible:ring-[3px] focus-visible:ring-[var(--brand)]/10" />
+              </div>
+              {errors.root && <p id="two-factor-error" role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm leading-5 text-red-700">{errors.root.message}</p>}
+              <Button type="submit" size="lg" isLoading={isCompletingTwoFactor} disabled={isCompletingTwoFactor} className="h-[54px] w-full justify-between rounded-xl bg-[var(--brand)] px-5 text-[13px] font-semibold text-white">
+                Vérifier et se connecter <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <button type="button" onClick={() => { setTwoFactorChallengeToken(null); setTwoFactorCode(""); setStep("email"); setVerificationChallenge(null); setVerificationToken(null); clearErrors(); }} className="text-xs font-semibold text-[var(--brand-strong)] underline-offset-4 hover:underline">Recommencer la connexion</button>
+            </form>}
 
             <div className="mt-8 grid grid-cols-[1fr_auto_1fr] items-center gap-3" aria-hidden="true">
               <span className="h-px bg-slate-200" />
@@ -319,6 +590,13 @@ export default function LoginPage() {
         @keyframes login-enter {
           from { opacity: 0; transform: translateY(8px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes password-field-enter {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .login-password-enter {
+          animation: password-field-enter 320ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
         }
         @keyframes login-headline-reveal {
           from { opacity: 0; transform: translateY(10px); }
@@ -495,6 +773,7 @@ export default function LoginPage() {
         }
         @media (prefers-reduced-motion: reduce) {
           .login-content { animation: none; }
+          .login-password-enter { animation: none; }
           .login-headline-line,
           .login-headline-underline,
           .login-headline-underline::after { animation: none; opacity: 1; transform: none; }
