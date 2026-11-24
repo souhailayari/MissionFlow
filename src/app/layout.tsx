@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { Providers } from "@/app/providers";
 import "leaflet/dist/leaflet.css";
@@ -27,7 +28,9 @@ export const viewport: Viewport = {
   colorScheme: "light",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  await connection();
+
   return (
     <html lang="fr" className="font-sans" data-scroll-behavior="smooth">
       <body><Providers>{children}</Providers></body>
